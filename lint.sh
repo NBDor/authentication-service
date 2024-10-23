@@ -20,12 +20,6 @@ handle_error() {
     exit 1
 }
 
-# Check if virtual environment is activated
-if [[ -z "$VIRTUAL_ENV" ]]; then
-    echo -e "${RED}Virtual environment is not activated. Please activate it first.${NC}"
-    exit 1
-fi
-
 # Format with Black
 print_section "Running Black..."
 black . || handle_error "Black formatting"
