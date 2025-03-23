@@ -1,66 +1,77 @@
-from functools import lru_cache
-from typing import Any, List, Optional, Union
-from typing_extensions import TypeAlias
-from pydantic import AnyHttpUrl, Field, field_validator
-from pydantic_settings import BaseSettings
-
-# Type aliases
-DatabaseValues: TypeAlias = dict[str, Any]
-StrOrStrList: TypeAlias = Union[str, List[str]]
+from typing import Any, Dict, Optional, Union, List
+from pydantic import field_validator, AnyHttpUrl, PostgresDsn, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # API Settings
-    API_V1_STR: str = Field(default="/api/v1")
-    PROJECT_NAME: str = Field(default="Authentication Service")
-    VERSION: str = Field(default="1.0.0")
-
-    # Security Settings
-    JWT_SECRET_KEY: str = Field(...)
-    JWT_REFRESH_SECRET_KEY: str = Field(...)
-    JWT_ALGORITHM: str = Field(default="HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30)
-    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7)
-
-    # CORS Settings
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = Field(default_factory=list)
-
-    # Database Settings
-    POSTGRES_SERVER: str = Field(...)
-    POSTGRES_USER: str = Field(...)
-    POSTGRES_PASSWORD: str = Field(...)
-    POSTGRES_DB: str = Field(...)
-    SQLALCHEMY_DATABASE_URI: Optional[str] = Field(default=None)
-
-    model_config = {
-        "env_file": ".env",
-        "case_sensitive": True,
-        "extra": "allow",
-    }
+    API_V1_STR: str = "/api/v1"
+    SECRET_KEY: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_SECRET_KEY: str
+    PROJECT_NAME: str = "Authentication Service"
+    
+    # BACKEND_CORS_ORIGINS is a comma-separated list of origins
+    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
-    def assemble_cors_origins(cls, v: StrOrStrList) -> List[str]:
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
         if isinstance(v, str) and not v.startswith("["):
             return [i.strip() for i in v.split(",")]
         elif isinstance(v, (list, str)):
-            return v if isinstance(v, list) else [v]
+            return v
         raise ValueError(v)
 
-    @field_validator("SQLALCHEMY_DATABASE_URI", mode="before")
-    def assemble_db_connection(cls, v: Optional[str], info: Any) -> str:
-        if isinstance(v, str):
-            return v
+    # Database settings
+    POSTGRES_SERVER: str
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_DB: str
+    POSTGRES_PORT: str = "5432"
+    DATABASE_URL: Optional[PostgresDsn] = None
+    SQLALCHEMY_DATABASE_URI: Optional[PostgresDsn] = None
 
-        values = info.data
-        return (
-            f"postgresql://{values['POSTGRES_USER']}:"
-            f"{values['POSTGRES_PASSWORD']}@"
-            f"{values['POSTGRES_SERVER']}/"
-            f"{values['POSTGRES_DB']}"
-        )
+    # Handle database URL construction after all fields are validated
+    @model_validator(mode="after")
+    def assemble_db_connection(self) -> "Settings":
+        """Construct database URL from components after all fields are validated."""
+        # If a database URL is already provided, use it
+        if self.DATABASE_URL:
+            self.SQLALCHEMY_DATABASE_URI = self.DATABASE_URL
+            return self
+            
+        # Check if we have all required fields
+        if (self.POSTGRES_SERVER and self.POSTGRES_USER and 
+            self.POSTGRES_PASSWORD and self.POSTGRES_DB and self.POSTGRES_PORT):
+            
+            # Construct the PostgreSQL connection URL
+            db_url = PostgresDsn.build(
+                scheme="postgresql",
+                username=self.POSTGRES_USER,
+                password=self.POSTGRES_PASSWORD,
+                host=self.POSTGRES_SERVER,
+                port=self.POSTGRES_PORT,
+                path=f"{self.POSTGRES_DB}",
+            )
+            
+            # Set both URL fields to the same value
+            self.DATABASE_URL = db_url
+            self.SQLALCHEMY_DATABASE_URI = db_url
+            
+        return self
+
+    ENVIRONMENT: str = "production"
+    
+    # User service URL for authentication
+    USER_SERVICE_URL: AnyHttpUrl
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
 
-@lru_cache
 def get_settings() -> Settings:
     return Settings()
 
